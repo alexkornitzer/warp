@@ -67,7 +67,18 @@ use http::{
 };
 use hyper::Body;
 
-pub(crate) use self::sealed::{CombineRejection, IsReject};
+//pub(crate) use self::sealed::{CombineRejection, IsReject};
+pub(crate) use self::sealed::CombineRejection;
+
+/// A trait to allow the deduction on the cause of a Rejection
+pub trait IsReject: fmt::Debug + Send + Sync {
+    /// The status code for the rejection
+    fn status(&self) -> StatusCode;
+    /// The reason for the rejection
+    fn reason(&self) -> String;
+    /// Convert the rejection into a response
+    fn into_response(&self) -> crate::reply::Response;
+}
 
 /// Rejects a request with `404 Not Found`.
 #[inline]
@@ -362,6 +373,10 @@ impl IsReject for Infallible {
         match *self {}
     }
 
+    fn reason(&self) -> String {
+        match *self {}
+    }
+
     fn into_response(&self) -> crate::reply::Response {
         match *self {}
     }
@@ -372,6 +387,29 @@ impl IsReject for Rejection {
         match self.reason {
             Reason::NotFound => StatusCode::NOT_FOUND,
             Reason::Other(ref other) => other.status(),
+        }
+    }
+
+    fn reason(&self) -> String {
+        match self.reason {
+            Reason::NotFound => String::from("not found"),
+            Reason::Other(ref other) => match **other {
+                Rejections::Known(ref e) => e.to_string(),
+                Rejections::Custom(ref e) => format!("{:?}", e),
+                Rejections::Combined(ref a, ref b) => {
+                    let a = a.preferred();
+                    let b = b.preferred();
+                    match (a.status(), b.status()) {
+                        (_, StatusCode::NOT_FOUND) => a,
+                        (StatusCode::NOT_FOUND, _) => b,
+                        (_, StatusCode::METHOD_NOT_ALLOWED) => a,
+                        (StatusCode::METHOD_NOT_ALLOWED, _) => b,
+                        (sa, sb) if sa < sb => b,
+                        _ => a,
+                    }
+                    .reason()
+                }
+            },
         }
     }
 
@@ -436,6 +474,14 @@ impl Rejections {
             },
             Rejections::Custom(..) => StatusCode::INTERNAL_SERVER_ERROR,
             Rejections::Combined(..) => self.preferred().status(),
+        }
+    }
+
+    fn reason(&self) -> String {
+        match *self {
+            Rejections::Known(ref e) => e.to_string(),
+            Rejections::Custom(ref e) => format!("{:?}", e),
+            Rejections::Combined(..) => self.preferred().reason(),
         }
     }
 
@@ -606,17 +652,20 @@ impl fmt::Display for MissingCookie {
 impl StdError for MissingCookie {}
 
 mod sealed {
-    use super::{Reason, Rejection, Rejections};
-    use http::StatusCode;
+    use super::{IsReject, Reason, Rejection, Rejections};
+    //use http::StatusCode;
     use std::convert::Infallible;
-    use std::fmt;
+    //use std::fmt;
 
+    /*
     // This sealed trait exists to allow Filters to return either `Rejection`
     // or `!`. There are no other types that make sense, and so it is sealed.
     pub trait IsReject: fmt::Debug + Send + Sync {
         fn status(&self) -> StatusCode;
+        fn reason(&self) -> String;
         fn into_response(&self) -> crate::reply::Response;
     }
+    */
 
     fn _assert_object_safe() {
         fn _assert(_: &dyn IsReject) {}
